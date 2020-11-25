@@ -145,6 +145,13 @@ def read_data_file_laas(file_path, dt):
 
     return arr_dic
 
+def read_data_file_laas_ctrl(file_path):
+    data = np.load(file_path)
+
+    arr_dic = {
+        'log_feet_pos_target': data['log_feet_pos_target']
+    }
+    return arr_dic
 
 def shortened_arr_dic(arr_dic, S, N=None):
     if N is None:

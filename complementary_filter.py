@@ -142,6 +142,10 @@ class Estimator:
         self.rotated_FK = np.zeros((3, N_simulation))
         self.k_log = 0
 
+    
+    def get_configurations(self):
+        return self.q_filt.reshape((19,)), self.v_filt.reshape((18,))
+
     def get_data_IMU(self, device):
         """Get data from the IMU (linear acceleration, angular velocity and position)
 
@@ -495,6 +499,6 @@ class Estimator:
                 plt.plot(logger.feet_vel[i, j, :], linewidth=3)
         plt.suptitle("Velocity of feet over time")"""
 
-        plt.show(block=True)
+        plt.show(block=False)
 
         return 0

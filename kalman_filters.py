@@ -1,6 +1,8 @@
 from functools import partial
 import numpy as np
 import pinocchio as pin
+from example_robot_data import load
+from contact_forces_estimator import ContactForcesEstimator
 
 def screw(v):
     return np.array([0,   -v[2],  v[1],
@@ -17,30 +19,57 @@ def cross3(u, v):
 
 class ImuLegKF:
 
-    def __init__(self, robot, dt, contact_ids, x_init, b_T_i, std_prior, std_kf_dic):
-        self.robot = robot
+    def __init__(self, dt, q_init):
+        self.robot = load('solo12')
+
         # stores a look up table for contact state position
-        self.contact_ids = contact_ids
+        LEGS = ['FL', 'FR', 'HL', 'HR']
+        contact_frame_names = [leg+'_ANKLE' for leg in LEGS]
+        self.contact_ids = [self.robot.model.getFrameId(leg_name) for leg_name in contact_frame_names]
+        nbc = len(self.contact_ids)
+
         # position of contact of id "cid" in state vector
-        self.cid_stateidx_map = {cid: 6+3*i for i, cid in enumerate(contact_ids)}
+        self.cid_stateidx_map = {cid: 6+3*i for i, cid in enumerate(self.contact_ids)}
+
         # state structure: [base position, base velocity, [feet position] ] 
         # all quantities expressed in universe frame
         # [o_p_ob, o_v_o1, o_p_ol1, o_p_ol1, o_p_ol1, o_p_ol3]
-        self.x = x_init
+        o_p_ol_lst = [self.robot.framePlacement(q_init, leg_id).translation for leg_id in self.contact_ids]
+        # initialize the state
+        self.x = np.concatenate((q_init[0:3], np.zeros(3), *o_p_ol_lst))
+        self.state_size = 6+nbc*3
 
-        self.state_size = 6+len(contact_ids)*3
+        # Base to IMU transformation
+        # b_p_bi = np.zeros(3)
+        self.b_p_bi = np.array([0.1163, 0.0, 0.02])
+        b_q_i  = np.array([0, 0, 0, 1])
 
-        # state cov
+        self.b_T_i = pin.SE3((pin.Quaternion(b_q_i.reshape((4,1)))).toRotationMatrix(), self.b_p_bi)
+        self.i_T_b = self.b_T_i.inverse()
+        self.b_R_i = self.b_T_i.rotation
+        self.i_R_b = self.i_T_b.rotation
+        self.i_p_ib = self.i_T_b.translation
+
+        # state prior cov
+        std_p_prior = 0.01*np.ones(3)
+        std_v_prior = 1*np.ones(3)
+        std_pl_priors = 10*np.ones(3*nbc)
+        std_prior = np.concatenate((std_p_prior, std_v_prior, std_pl_priors))
         self.P = np.diag(std_prior)**2
 
         # discretization period
         self.dt = dt
 
-        # fixed relative transformation between base and imu
-        self.b_T_i = b_T_i
-        self.i_T_b = self.b_T_i.inverse()
-        self.i_R_b =  self.b_T_i.rotation.T
-        self.b_p_bi = self.b_T_i.translation
+        # filter noises
+        std_kf_dic = {
+            'std_foot': 0.1,  # m/sqrt(Hz) process noise on foot dynamics when in contact -> raised when stable contact interuption
+            'std_acc': 0.1,# noise on linear acceleration measurements
+            'std_wb': 0.001,# noise on angular velocity measurements
+            'std_qa': 0.05,# noise on joint position measurements
+            'std_dqa': 0.05,# noise on joint velocity measurements
+            'std_kin': 0.01,# kinematic uncertainties
+            'std_hfoot': 0.01,# terrain height uncertainty -> roughness of the terrain
+        } 
 
         # static jacs and covs
         self.Qacc = std_kf_dic['std_acc']**2 * np.eye(3)
@@ -56,33 +85,89 @@ class ImuLegKF:
 
         self.H_vel = self.vel_meas_H()
         self.H_relp_dic = {cid: self.relp_meas_H(cid_idx) for cid, cid_idx in self.cid_stateidx_map.items()}
+
+        # measurements to be used in KF update by default
+        # self.measurements = (0,0,0)  # nothing happens
+        # self.measurements = (1,0,0)  # only kin
+        # self.measurements = (0,1,0)  # only diff kin
+        self.measurements = (1,1,0)  # all kinematics
+        # self.measurements = (1,1,1)  # all kinematics + foot height
+
+        # contact detection
+        self.k_since_contact = np.zeros(4)
+
+    def run_filter(self, o_a_oi, o_R_i, qa, dqa, i_omg_oi, contact_status):
+        self.update_data(o_a_oi, o_R_i, qa, dqa, i_omg_oi, contact_status)
+        self.detect_feets_in_contact()
+        self.propagate()
+        self.correct()
     
+    def update_data(self, o_a_oi, o_R_i, qa, dqa, i_omg_oi, contact_status):
+        self.o_a_oi = o_a_oi   
+        self.o_R_i = o_R_i   
+        self.qa = qa   
+        self.dqa = dqa   
+        self.i_omg_oi = i_omg_oi 
+        self.contact_status = contact_status
+
+        self.o_R_b = o_R_i@self.i_R_b
+
     def get_state(self):
         return self.x
 
-    def propagate(self, o_a_o_i, feets_in_contact):
+    def get_state_base(self):
+        # state estimation is done in IMU frame -> composition to base frame
+        self.o_R_b = self.o_R_i @ self.i_R_b
+        self.o_q_b = pin.Quaternion(self.o_R_b).coeffs()
+        self.o_p_ob = self.x[0:3] + self.o_R_i @ self.i_p_ib
+        self.o_v_ob = self.x[3:6] + self.o_R_i @ cross3(self.i_omg_oi, self.i_p_ib)
+        self.b_omg_ob = self.b_R_i@self.i_omg_oi
+
+        # from current estimates
+        self.b_v_ob = self.o_R_b.T@self.o_v_ob
+
+        # only for force estimation
+        self.o_a_ob = self.o_a_oi + self.o_R_i@cross3(self.i_omg_oi, cross3(self.i_omg_oi, self.i_p_ib))     # acceleration composition (neglecting i_domgdt_oi x i_p_ib)
+
+        return 0
+    
+    def get_configurations(self):
+        # return state as configuration arrays
+        self.get_state_base()
+        q = np.concatenate([self.o_p_ob, self.o_q_b, self.qa])
+        v = np.concatenate([self.o_R_b.T@self.o_v_ob, self.b_omg_ob, self.dqa])
+        return q, v
+
+    def detect_feets_in_contact(self):
+        self.k_since_contact += self.contact_status  # Increment feet in stance phase
+        self.k_since_contact *= self.contact_status  # Reset feet in swing phase
+        self.feets_in_contact = (self.k_since_contact > 16) 
+
+    def propagate(self):
         """
-        o_a_o_i: acceleration of the imu wrt world frame in world frame (o_R_i*imu_acc + o_g)
+        o_a_oi: acceleration of the imu wrt world frame in world frame (o_R_i*imu_acc + o_g)
         (IMU proper acceleration rotated in world frame)
         feets_in_contact: options
              - size 4 boolean array
              - 
         """
         # state propagation
-        self.x[0:3] += self.x[3:6] * self.dt + 0.5*o_a_o_i*self.dt**2
-        self.x[3:6] += o_a_o_i*self.dt
+        self.x[0:3] += self.x[3:6] * self.dt + 0.5*self.o_a_oi*self.dt**2
+        self.x[3:6] += self.o_a_oi*self.dt
         
         # cov propagation
         # adjust Qk depending on feet in contact?
-        self.propagate_cov(feets_in_contact)
+        self.propagate_cov(self.feets_in_contact)
 
-    def correct(self, qa, dqa, o_R_i, i_omg_oi, feets_in_contact, measurements=(1,1,1)):
+    def correct(self, measurements=None):
         """
         measurements: which measurements to use -> geometry?, differential?, zero height?
         """
+        if measurements is None:
+            measurements = self.measurements
         # just to be sure we do not have base placement/velocity in q and dq
-        q_st = np.concatenate([np.array(6*[0]+[1]), qa])
-        dq_st = np.concatenate([np.zeros(6), dqa])
+        q_st = np.concatenate([np.array(6*[0]+[1]), self.qa])
+        dq_st = np.concatenate([np.zeros(6), self.dqa])
         # update the robot state, freeflyer at the universe not moving
         self.robot.forwardKinematics(q_st, dq_st)
         #################
@@ -92,20 +177,20 @@ class ImuLegKF:
         # Adapt cov if in contact or not
         
         if measurements[0]:
-            self.correct_relp(q_st, o_R_i,  feets_in_contact)
+            self.correct_relp(q_st, self.o_R_i,  self.feets_in_contact)
 
         ################################
         # differential kinematics update
         ################################
         # For feet in contact only, use the zero velocity assumption to derive base velocity measures
         if measurements[1]:
-            self.correct_relv(q_st, dq_st, i_omg_oi, o_R_i, feets_in_contact)
+            self.correct_relv(q_st, dq_st, self.i_omg_oi, self.o_R_i, self.feets_in_contact)
 
         # ####################################
         # # foot in contact zero height update
         # ####################################
         if measurements[2]:
-            self.correct_height(feets_in_contact)
+            self.correct_height(self.feets_in_contact)
     
     def correct_relp(self, q_st, o_R_i,  feets_in_contact):
         for i_ee, cid in enumerate(self.cid_stateidx_map):
@@ -205,66 +290,6 @@ class ImuLegKF:
         # minuses due to relation [.]x^T = -[.]x
         return o_R_i@(b_Jl @ self.Qdqa @ b_Jl.T - b_p_bl_x @ self.Qwb @ b_p_bl_x - wbx @ b_Jl @ self.Qqa @ b_Jl.T @ wbx)@o_R_i.T
  
-
-
-
-class ImuLegCF:
-
-    def __init__(self, robot, dt, contact_ids, x_init, b_T_i):
-        self.robot = robot
-        self.contact_ids = contact_ids
-        # [o_p_ob, o_v_o1]
-        self.x = x_init
-
-        # fixed relative transformation between base and imu
-        self.b_T_i = b_T_i
-        self.i_R_b =  self.b_T_i.rotation.T
-        self.b_p_bi = self.b_T_i.translation
-
-        # discretization period
-        self.dt = dt
-
-        self.v_imu_int = x_init[3:6]
-        self.v_imu_hp =  x_init[3:6]
-        self.v_kin_lp =  x_init[3:6]
-
-        self.alpha = 0.99
-
-    def get_state(self):
-        return self.x
-
-    def update_state(self, o_acc, qa, dqa, i_omg_oi, o_R_i, feets_in_contact):
-        if sum(feets_in_contact) == 0:
-            # no feet in contact, nothing to do
-            return
-            
-        # just to be sure we do not have base placement/velocity in q and dq
-        q_st = np.concatenate([np.array(6*[0]+[1]), qa])
-        dq_st = np.concatenate([np.zeros(6), dqa])
-        # update the robot state, freeflyer at the universe not moving
-        self.robot.forwardKinematics(q_st, dq_st)
-
-        # integrate position
-        self.x[:3] += self.x[3:6]*self.dt + 0.5*o_acc*self.dt**2
-
-        # get integrated velocity from IMU acceleration
-        v_imu_int_prev  = self.v_imu_int.copy()
-        self.v_imu_int += o_acc*self.dt 
-        self.v_imu_hp = self.alpha*(self.v_imu_int - v_imu_int_prev + self.v_imu_hp)
-
-        # get current velocity mean from contacts
-        o_vi_kin_mean = np.zeros(3)
-        for i, cid in enumerate(self.contact_ids):
-            if feets_in_contact[i]:            
-                o_v_ob = base_vel_from_stable_contact(self.robot, q_st, dq_st, i_omg_oi, o_R_i, cid)
-                o_v_oi = o_v_ob + o_R_i @ cross3(i_omg_oi, self.i_R_b@self.b_p_bi)
-                o_vi_kin_mean += o_v_oi
-
-        o_vi_kin_mean /= len(feets_in_contact)
-        self.v_kin_lp = self.alpha*self.v_kin_lp + (1 - self.alpha)*o_vi_kin_mean
-
-        self.x[3:6] = self.v_kin_lp + self.v_imu_hp
-
 
 def base_vel_from_stable_contact(robot, q, dq, i_omg_oi, o_R_i, cid):
     """
