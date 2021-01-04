@@ -360,7 +360,6 @@ class KFilter:
 
         # Initial state and covariance
         self.X0 = np.zeros((self.n, 1))
-        self.X0[3:, :] = np.ones((3, 1))
         self.P0 = np.zeros((self.n, self.n))
 
     def setFixed(self, A, H, Q, R):
@@ -405,6 +404,7 @@ if __name__ == "__main__":
     t = [dt*i for i in range(N)]
     p = np.sin(t)
     v = np.cos(t)
+    KF.X0[3:, :] = np.ones((3, 1))
     res = np.zeros((6, N))
 
     Z = np.random.normal(0, 0.1, (6, N))
