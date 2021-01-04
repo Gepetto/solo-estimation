@@ -2,7 +2,6 @@ from functools import partial
 import numpy as np
 import pinocchio as pin
 from example_robot_data import load
-from contact_forces_estimator import ContactForcesEstimator
 
 def screw(v):
     return np.array([0,   -v[2],  v[1],
@@ -17,43 +16,82 @@ def cross3(u, v):
             u[0]*v[1] - u[1]*v[0]
             ])
 
-class ImuLegKF:
+def q2R(q_arr):
+    return pin.Quaternion(q_arr.reshape((4,1))).toRotationMatrix()
+
+class KalmanFilter:
+
+    def __init__(self):
+        pass
+
+    def kalman_update(self, y, H, R):
+        # general unoptimized kalman update
+        # innovation z = y - h(x)
+        # Innov cov Z = HPH’ + R ; avec H = dh/dx = - dz/dx
+        # Kalman gain K = PH’ / Z
+        # state error dx = K*z
+        # State update x <-- x (+) dx
+        # Cov update P <-- P - KZP
+
+        z = y - H @ self.x
+        Z = H @ self.P @ H.T + R
+        if isinstance(Z, np.ndarray):
+            K = self.P @ H.T @ np.linalg.inv(Z)
+            dx = K @ z
+        else:  # for scalar measurements
+            K = self.P @ H.T / Z
+            dx = K * z
+            # reshape to avoid confusion between inner and outer product when multiplying 2 1d arrays
+            K = K.reshape((self.state_size,1))
+            H = H.reshape((1,self.state_size))
+        self.x = self.x + dx
+        self.P = self.P - K @ H @ self.P
+        
+        return z, dx
+
+class ImuLegKF(KalmanFilter):
 
     def __init__(self, dt, q_init):
         self.robot = load('solo12')
 
         # stores a look up table for contact state position
         LEGS = ['FL', 'FR', 'HL', 'HR']
-        contact_frame_names = [leg+'_ANKLE' for leg in LEGS]
-        self.contact_ids = [self.robot.model.getFrameId(leg_name) for leg_name in contact_frame_names]
-        nbc = len(self.contact_ids)
+        self.contact_frame_names = [leg+'_ANKLE' for leg in LEGS]
+        self.contact_ids = [self.robot.model.getFrameId(leg_name) for leg_name in self.contact_frame_names]
+        self.nbc = len(self.contact_ids)
 
         # position of contact of id "cid" in state vector
         self.cid_stateidx_map = {cid: 6+3*i for i, cid in enumerate(self.contact_ids)}
-
-        # state structure: [base position, base velocity, [feet position] ] 
-        # all quantities expressed in universe frame
-        # [o_p_ob, o_v_o1, o_p_ol1, o_p_ol1, o_p_ol1, o_p_ol3]
-        o_p_ol_lst = [self.robot.framePlacement(q_init, leg_id).translation for leg_id in self.contact_ids]
-        # initialize the state
-        self.x = np.concatenate((q_init[0:3], np.zeros(3), *o_p_ol_lst))
-        self.state_size = 6+nbc*3
 
         # Base to IMU transformation
         # b_p_bi = np.zeros(3)
         self.b_p_bi = np.array([0.1163, 0.0, 0.02])
         b_q_i  = np.array([0, 0, 0, 1])
 
-        self.b_T_i = pin.SE3((pin.Quaternion(b_q_i.reshape((4,1)))).toRotationMatrix(), self.b_p_bi)
+        self.b_T_i = pin.SE3(q2R(b_q_i), self.b_p_bi)
         self.i_T_b = self.b_T_i.inverse()
         self.b_R_i = self.b_T_i.rotation
         self.i_R_b = self.i_T_b.rotation
         self.i_p_ib = self.i_T_b.translation
 
+        # state structure: [base position, base velocity, [feet position] ] 
+        # all quantities expressed in universe frame
+        # [o_p_ob, o_v_o1, o_p_ol1, o_p_ol1, o_p_ol1, o_p_ol3]
+        o_p_ol_lst = [self.robot.framePlacement(q_init, leg_id).translation for leg_id in self.contact_ids]
+        # for o_p_ol in o_p_ol_lst: 
+        #     print(o_p_ol)
+        # initialize the state
+        o_p_ob = q_init[0:3]
+        o_R_i = q2R(q_init[3:7])
+        o_p_oi = o_p_ob - o_R_i@self.i_p_ib
+        self.x = np.concatenate((o_p_oi, np.zeros(3), *o_p_ol_lst))
+        self.state_size = 6+self.nbc*3
+
         # state prior cov
-        std_p_prior = 0.01*np.ones(3)
+        # std_p_prior = 0.01*np.ones(3)
+        std_p_prior = np.array([0.0001, 0.0001, 0.1])
         std_v_prior = 1*np.ones(3)
-        std_pl_priors = 10*np.ones(3*nbc)
+        std_pl_priors = 0.1*np.ones(3*self.nbc)
         std_prior = np.concatenate((std_p_prior, std_v_prior, std_pl_priors))
         self.P = np.diag(std_prior)**2
 
@@ -62,13 +100,13 @@ class ImuLegKF:
 
         # filter noises
         std_kf_dic = {
-            'std_foot': 0.1,  # m/sqrt(Hz) process noise on foot dynamics when in contact -> raised when stable contact interuption
-            'std_acc': 0.1,# noise on linear acceleration measurements
-            'std_wb': 0.001,# noise on angular velocity measurements
-            'std_qa': 0.05,# noise on joint position measurements
-            'std_dqa': 0.05,# noise on joint velocity measurements
-            'std_kin': 0.01,# kinematic uncertainties
-            'std_hfoot': 0.01,# terrain height uncertainty -> roughness of the terrain
+            'std_foot': 0.005,   # m/sqrt(Hz) process noise on foot dynamics when in contact -> raised when stable contact interuption
+            'std_acc': 0.08,    # noise on linear acceleration measurements (m.s-2), add a slack to account for bias
+            'std_wb': 0.01,    # noise on angular velocity measurements (rad.s-1), add a slack to account for bias 
+            'std_qa': 0.05,     # noise on joint position measurements (rad)
+            'std_dqa': 0.05,    # noise on joint velocity measurements (rad.s-1)
+            'std_kin': 0.005,    # kinematic uncertainties (m)
+            'std_hfoot': 0.001, # terrain height uncertainty -> roughness of the terrain
         } 
 
         # static jacs and covs
@@ -87,11 +125,11 @@ class ImuLegKF:
         self.H_relp_dic = {cid: self.relp_meas_H(cid_idx) for cid, cid_idx in self.cid_stateidx_map.items()}
 
         # measurements to be used in KF update by default
-        # self.measurements = (0,0,0)  # nothing happens
-        # self.measurements = (1,0,0)  # only kin
-        # self.measurements = (0,1,0)  # only diff kin
-        self.measurements = (1,1,0)  # all kinematics
-        # self.measurements = (1,1,1)  # all kinematics + foot height
+        # self.meas_choices = (0,0,0)  # nothing happens
+        # self.meas_choices = (1,0,0)  # only kin
+        # self.meas_choices = (0,1,0)  # only diff kin
+        # self.meas_choices = (1,1,0)  # all kinematics
+        self.meas_choices = (1,1,1)  # all kinematics + foot height
 
         # contact detection
         self.k_since_contact = np.zeros(4)
@@ -114,8 +152,15 @@ class ImuLegKF:
 
     def get_state(self):
         return self.x
+        
+    def get_configurations(self):
+        # return state as configuration arrays
+        self.update_base_state()
+        q = np.concatenate([self.o_p_ob, self.o_q_b, self.qa])
+        v = np.concatenate([self.o_R_b.T@self.o_v_ob, self.b_omg_ob, self.dqa])
+        return q, v
 
-    def get_state_base(self):
+    def update_base_state(self):
         # state estimation is done in IMU frame -> composition to base frame
         self.o_R_b = self.o_R_i @ self.i_R_b
         self.o_q_b = pin.Quaternion(self.o_R_b).coeffs()
@@ -130,13 +175,6 @@ class ImuLegKF:
         self.o_a_ob = self.o_a_oi + self.o_R_i@cross3(self.i_omg_oi, cross3(self.i_omg_oi, self.i_p_ib))     # acceleration composition (neglecting i_domgdt_oi x i_p_ib)
 
         return 0
-    
-    def get_configurations(self):
-        # return state as configuration arrays
-        self.get_state_base()
-        q = np.concatenate([self.o_p_ob, self.o_q_b, self.qa])
-        v = np.concatenate([self.o_R_b.T@self.o_v_ob, self.b_omg_ob, self.dqa])
-        return q, v
 
     def detect_feets_in_contact(self):
         self.k_since_contact += self.contact_status  # Increment feet in stance phase
@@ -159,12 +197,12 @@ class ImuLegKF:
         # adjust Qk depending on feet in contact?
         self.propagate_cov(self.feets_in_contact)
 
-    def correct(self, measurements=None):
+    def correct(self, meas_choices=None):
         """
         measurements: which measurements to use -> geometry?, differential?, zero height?
         """
-        if measurements is None:
-            measurements = self.measurements
+        if meas_choices is None:
+            meas_choices = self.meas_choices
         # just to be sure we do not have base placement/velocity in q and dq
         q_st = np.concatenate([np.array(6*[0]+[1]), self.qa])
         dq_st = np.concatenate([np.zeros(6), self.dqa])
@@ -176,20 +214,20 @@ class ImuLegKF:
         # for each foot (in contact or not) update position using kinematics
         # Adapt cov if in contact or not
         
-        if measurements[0]:
+        if meas_choices[0]:
             self.correct_relp(q_st, self.o_R_i,  self.feets_in_contact)
 
         ################################
         # differential kinematics update
         ################################
         # For feet in contact only, use the zero velocity assumption to derive base velocity measures
-        if measurements[1]:
+        if meas_choices[1]:
             self.correct_relv(q_st, dq_st, self.i_omg_oi, self.o_R_i, self.feets_in_contact)
 
         # ####################################
         # # foot in contact zero height update
         # ####################################
-        if measurements[2]:
+        if meas_choices[2]:
             self.correct_height(self.feets_in_contact)
     
     def correct_relp(self, q_st, o_R_i,  feets_in_contact):
@@ -221,32 +259,7 @@ class ImuLegKF:
                 H = np.zeros(self.state_size)
                 H[self.cid_stateidx_map[cid]+2] = 1
                 self.kalman_update(hfoot, H, self.Qhfoot)
-
-    def kalman_update(self, y, H, R):
-        # general unoptimized kalman update
-        # innovation z = y - h(x)
-        # Innov cov Z = HPH’ + R ; avec H = dh/dx = - dz/dx
-        # Kalman gain K = PH’ / Z
-        # state error dx = K*z
-        # State update x <-- x (+) dx
-        # Cov update P <-- P - KZP
-
-        z = y - H @ self.x
-        Z = H @ self.P @ H.T + R
-        if isinstance(Z, np.ndarray):
-            K = self.P @ H.T @ np.linalg.inv(Z)
-            dx = K @ z
-        else:  # for scalar measurements
-            K = self.P @ H.T / Z
-            dx = K * z
-            # reshape to avoid confusion between inner and outer product when multiplying 2 1d arrays
-            K = K.reshape((self.state_size,1))
-            H = H.reshape((1,self.state_size))
-        self.x = self.x + dx
-        self.P = self.P - K @ H @ self.P
-        
-        return z, dx
-
+                
     def propagation_jac(self):
         F = np.eye(self.x.shape[0])
         F[0:3,3:6] = self.dt*np.eye(3)
