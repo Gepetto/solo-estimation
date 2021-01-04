@@ -330,6 +330,12 @@ class KFilter:
         self.A = np.eye(self.n)
         self.A[0:3, 3:6] = dt * np.eye(3)
 
+        # Control matrix
+        self.B = np.zeros((6, 3))
+        for i in range(3):
+            self.B[i, i] = 0.5 * dt**2
+            self.B[i+3, i] = dt
+
         # Observation matrix
         self.H = np.eye(self.n)
         # Z: n x 1 Measurement vector
@@ -375,10 +381,11 @@ class KFilter:
         self.X0 = X0
         self.P0 = P0
 
-    def predict(self):
+    def predict(self, U):
         # Make prediction based on physical system
+        # U : control vector (measured acceleration)
 
-        self.X = (self.A @ self.X0)
+        self.X = (self.A @ self.X0) + self.B @ U
         self.P = (self.A @ self.P0 @ self.A.transpose()) + self.Q
 
     def correct(self, Z):
@@ -404,6 +411,7 @@ if __name__ == "__main__":
     t = [dt*i for i in range(N)]
     p = np.sin(t)
     v = np.cos(t)
+    a = - np.sin(t)
     KF.X0[3:, :] = np.ones((3, 1))
     res = np.zeros((6, N))
 
@@ -413,7 +421,7 @@ if __name__ == "__main__":
         Z[i+3, :] += v
 
     for k in range(N):
-        KF.predict()
+        KF.predict(a[k] * np.ones((3, 1)))
         KF.correct(Z[:, k:(k+1)])
         res[:, k:(k+1)] = KF.X
 
