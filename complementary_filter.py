@@ -416,6 +416,7 @@ class Estimator:
 
             oRb = pin.Quaternion(np.array([self.IMU_ang_pos]).transpose()).toRotationMatrix()
             self.kf.A[0:3, 3:6] = self.kf.dt * oRb
+            self.kf.B[0:3, 0:3] = (0.5 * self.kf.dt**2) * oRb
 
             self.kf.predict(self.IMU_lin_acc.reshape((3, 1)))
             self.Z[0:3, 0] = self.FK_xyz[:] + self.xyz_mean_feet[:]
