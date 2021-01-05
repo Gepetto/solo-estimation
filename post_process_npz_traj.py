@@ -44,14 +44,19 @@ q_kf_arr = arr_dic['q_kf']
 v_kf_arr = arr_dic['v_kf']
 q_cf_arr = arr_dic['q_cf']
 v_cf_arr = arr_dic['v_cf']
+q_kfwof_arr = arr_dic['q_kfwof']
+v_kfwof_arr = arr_dic['v_kfwof']
 
 o_p_ob_kf_arr = q_kf_arr[:,:3]
 o_p_ob_cf_arr = q_cf_arr[:,:3]
+o_p_ob_kfwof_arr = q_kfwof_arr[:,:3]
 o_q_b_kf_arr = q_kf_arr[:,3:7]
 o_q_b_cf_arr = q_cf_arr[:,3:7]
+o_q_b_kfwof_arr = q_kfwof_arr[:,3:7]
 
 b_v_ob_kf_arr = v_kf_arr[:,:3]
 b_v_ob_cf_arr = v_cf_arr[:,:3]
+b_v_ob_kfwof_arr = v_kfwof_arr[:,:3]
 
 # GT
 w_p_wm_arr = arr_dic['w_p_wm']
@@ -60,10 +65,11 @@ w_v_wm_arr = arr_dic['w_v_wm']
 m_v_wm_arr = arr_dic['m_v_wm']
 
 # plot before trajectory alignment
-plt.figure('P KF CF before alignment')
+plt.figure('P KF CF KFWithoutFeet before alignment')
 plt.plot(w_p_wm_arr[:,0], w_p_wm_arr[:,1], label='MOCAP')
 plt.plot(q_kf_arr[:,0], q_kf_arr[:,1], label='KF')
 plt.plot(q_cf_arr[:,0], q_cf_arr[:,1], label='CF')
+plt.plot(q_kfwof_arr[:,0], q_kfwof_arr[:,1], label='KFWithoutFeet')
 plt.legend()
 plt.grid()
 # plt.show()
@@ -72,22 +78,27 @@ plt.grid()
 # based on first frame (se3 alignment)
 o_p_ob_kf_init = o_p_ob_kf_arr[0,:]
 o_p_ob_cf_init = o_p_ob_cf_arr[0,:]
+o_p_ob_kfwof_init = o_p_ob_kfwof_arr[0,:]
 w_p_wm_init = w_p_wm_arr[0,:]
 
 w_R_m_init = pin.Quaternion(w_q_m_arr[0,:].reshape((4,1))).toRotationMatrix()
 o_R_b_kf_init = pin.Quaternion(o_q_b_kf_arr[0,:].reshape((4,1))).toRotationMatrix()
 o_R_b_cf_init = pin.Quaternion(o_q_b_cf_arr[0,:].reshape((4,1))).toRotationMatrix()
+o_R_b_kfwof_init = pin.Quaternion(o_q_b_kfwof_arr[0,:].reshape((4,1))).toRotationMatrix()
 
 w_T_m_init = pin.SE3(w_R_m_init, w_p_wm_init)
 o_T_b_kf_init = pin.SE3(o_R_b_kf_init, o_p_ob_kf_init)
 o_T_b_cf_init = pin.SE3(o_R_b_cf_init, o_p_ob_cf_init)
+o_T_b_kfwof_init = pin.SE3(o_R_b_kfwof_init, o_p_ob_kfwof_init)
 
 w_T_okf = w_T_m_init * o_T_b_kf_init.inverse()
 w_T_ocf = w_T_m_init * o_T_b_cf_init.inverse()
+w_T_okfwof = w_T_m_init * o_T_b_kfwof_init.inverse()
 
 # transform estimated trajectories in mocap frame
 w_p_wb_kf_arr = np.array([w_T_okf.act(o_p_ob_kf) for o_p_ob_kf in o_p_ob_kf_arr])
 w_p_wb_cf_arr = np.array([w_T_ocf.act(o_p_ob_cf) for o_p_ob_cf in o_p_ob_cf_arr])
+w_p_wb_kfwof_arr = np.array([w_T_okfwof.act(o_p_ob_kfwof) for o_p_ob_kfwof in o_p_ob_kfwof_arr])
 
 # TODO: same for orientations
 
@@ -122,6 +133,7 @@ fig, ax = plt.subplots(1, 1, sharex=True, sharey=True)
 plot_xy_traj(w_p_wm_arr[:,:2], 'winter', fig, ax, 'b')
 plot_xy_traj(w_p_wb_cf_arr[:,:2], 'autumn', fig, ax, 'r')
 plot_xy_traj(w_p_wb_kf_arr[:,:2], 'spring', fig, ax, 'r')
+plot_xy_traj(w_p_wb_kfwof_arr[:,:2], 'summer', fig, ax, 'r')
 fig.tight_layout()
 
 xmin = w_p_wm_arr[:,0].min() 
@@ -138,6 +150,11 @@ xmin = min(xmin, w_p_wb_kf_arr[:,0].min())
 xmax = max(xmax, w_p_wb_kf_arr[:,0].max()) 
 ymin = min(ymin, w_p_wb_kf_arr[:,1].min()) 
 ymax = max(ymax, w_p_wb_kf_arr[:,1].max())
+
+xmin = min(xmin, w_p_wb_kfwof_arr[:,0].min()) 
+xmax = max(xmax, w_p_wb_kfwof_arr[:,0].max()) 
+ymin = min(ymin, w_p_wb_kfwof_arr[:,1].min()) 
+ymax = max(ymax, w_p_wb_kfwof_arr[:,1].max())
 
 offx = 0.1*(xmax - xmin)
 offy = 0.1*(ymax - ymin)
@@ -187,6 +204,7 @@ ylabels = ['Vx [m/s]', 'Vy [m/s]', 'Vz [m/s]']
 for i in range(3):
     axs[i].plot(t_arr, b_v_ob_kf_arr[:,i], markersize=1, label='KF')
     axs[i].plot(t_arr, b_v_ob_cf_arr[:,i], markersize=1, label='CF')
+    axs[i].plot(t_arr, b_v_ob_kfwof_arr[:,i], markersize=1, label='KFWoF')
     axs[i].plot(t_arr, m_v_wm_arr_filt[:,i], markersize=1, label='Mo-Cap')
     axs[i].set_ylabel(ylabels[i])
     axs[i].yaxis.set_label_position("right")
@@ -201,6 +219,7 @@ ylabels = ['Px [m]', 'Py [m]', 'Pz [m]']
 for i in range(3):
     axs[i].plot(t_arr, w_p_wb_kf_arr[:,i], markersize=1, label='KF')
     axs[i].plot(t_arr, w_p_wb_cf_arr[:,i], markersize=1, label='CF')
+    axs[i].plot(t_arr, w_p_wb_kfwof_arr[:,i], markersize=1, label='KFWoF')
     axs[i].plot(t_arr, w_p_wm_arr[:,i], markersize=1, label='Mo-Cap')
     axs[i].set_ylabel(ylabels[i])
     axs[i].yaxis.set_label_position("right")

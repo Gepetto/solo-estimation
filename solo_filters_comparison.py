@@ -77,17 +77,20 @@ o_v_oi = np.zeros(3)
 qa = arr_dic_meas['qa'][0,:]
 q_init = np.hstack([o_p_ob, o_q_i, qa])
 
-kf = ImuLegKF(dt, q_init)
+KFImuLegWithFeet = ImuLegKF(dt, q_init)
 cf = Estimator(dt, N, h_init=H_INIT)
+KFImuLeg = Estimator(dt, N, h_init=H_INIT, kf_enabled=True)
 
 robot = load('solo12')
-force_est = ContactForcesEstimator(robot, kf.contact_ids, dt)
+force_est = ContactForcesEstimator(robot, KFImuLegWithFeet.contact_ids, dt)
 
 # some useful recordings
 q_kf_arr = np.zeros((N, 19))
 v_kf_arr = np.zeros((N, 18))
 q_cf_arr = np.zeros((N, 19))
 v_cf_arr = np.zeros((N, 18))
+q_kfwof_arr = np.zeros((N, 19))
+v_kfwof_arr = np.zeros((N, 18))
 fz_arr = np.zeros((N,4))
 contact_status_arr = np.zeros((N,4))
 feet_state_arr = np.zeros((N,4*3))
@@ -121,15 +124,20 @@ for i in range(N):
 
         goals = np.zeros((3,4))
 
-    # Kalman Filter
-    kf.run_filter(o_a_oi, o_R_i, qa, dqa, i_omg_oi, contact_status)
-    q_kf_arr[i,:], v_kf_arr[i,:] = kf.get_configurations()
-    feet_state_arr[i,:] = kf.get_state()[6:]
+    # Kalman Filter with feet
+    KFImuLegWithFeet.run_filter(o_a_oi, o_R_i, qa, dqa, i_omg_oi, contact_status)
+    q_kf_arr[i,:], v_kf_arr[i,:] = KFImuLegWithFeet.get_configurations()
+    feet_state_arr[i,:] = KFImuLegWithFeet.get_state()[6:]
 
     # Complementary filter
     device = Device(o_a_oi, i_omg_oi, o_q_i, qa, dqa)
     cf.run_filter(i, contact_status, device, goals, remaining_steps=100)
     q_cf_arr[i,:], v_cf_arr[i,:] = cf.get_configurations()
+
+    # Kalman Filter without feet
+    device = Device(o_a_oi, i_omg_oi, o_q_i, qa, dqa)
+    KFImuLeg.run_filter(i, contact_status, device, goals, remaining_steps=100)
+    q_kfwof_arr[i,:], v_kfwof_arr[i,:] = KFImuLeg.get_configurations()
 
 
 # data to copy
@@ -142,7 +150,8 @@ res_arr_dic['q_kf'] = q_kf_arr
 res_arr_dic['v_kf'] = v_kf_arr
 res_arr_dic['q_cf'] = q_cf_arr
 res_arr_dic['v_cf'] = v_cf_arr
-
+res_arr_dic['q_kfwof'] = q_kfwof_arr
+res_arr_dic['v_kfwof'] = v_kfwof_arr
 
 out_path = DATA_FOLDER_RESULTS+'out.npz'
 np.savez(out_path, **res_arr_dic)
@@ -154,7 +163,7 @@ plt.figure('Normal forces')
 plt.title('Normal forces')
 for i in range(4):
     plt.subplot(4,1,i+1)
-    plt.plot(t_arr, fz_arr[:,i], label='fz '+kf.contact_frame_names[i])
+    plt.plot(t_arr, fz_arr[:,i], label='fz '+KFImuLegWithFeet.contact_frame_names[i])
     plt.plot(t_arr, contact_status_arr[:,i]*THRESH_FZ, label='contact')
     plt.plot(t_arr, arr_dic_meas['contactStatus'][:,i]*THRESH_FZ, label='contact')
     plt.hlines(0, t_arr[0]-1, t_arr[-1]+1, 'k')
@@ -164,8 +173,9 @@ plt.figure('Filter positions')
 plt.title('Filter positions')
 for i in range(3):
     plt.subplot(3,1,1+i)
-    plt.plot(t_arr, q_kf_arr[:,i], 'g', label='KF')
+    plt.plot(t_arr, q_kf_arr[:,i], 'g', label='KFWithFeet')
     plt.plot(t_arr, q_cf_arr[:,i], 'b', label='CF')
+    plt.plot(t_arr, q_kfwof_arr[:,i], 'r', label='KFWithoutFeet')
     plt.legend()
 
 plt.figure('KF feet')
