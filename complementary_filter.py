@@ -28,9 +28,10 @@ class KFilter:
         # Covariance of the process noise
         self.Q = np.zeros((self.n, self.n))
         # Uncontrolled forces cause a constant acc perturbation that is normally distributed
-        sigma_acc = 0.1
+        # sigma_acc = 0.1
+        sigma_acc = 1000
         G = np.array([[0.5 * dt**2], [0.5 * dt**2], [0.5 * dt**2], [dt], [dt], [dt]])
-        self.Q = G @ G.transpose() * (sigma_acc**2)
+        self.Q = G @ G.T * (sigma_acc**2)
 
         # Covariance of the observation noise
         self.R = np.zeros((self.n, self.n))
@@ -50,8 +51,9 @@ class KFilter:
         self.X = np.zeros((self.n, 1))
 
         # Initial state and covariance
-        self.X0 = np.zeros((self.n, 1))
-        self.P0 = np.zeros((self.n, self.n))
+        self.X = np.zeros((self.n, 1))
+        # self.P = np.zeros((self.n, self.n))
+        self.P = 0.1*np.ones((self.n, self.n))
 
     def setFixed(self, A, H, Q, R):
         self.A = A
@@ -60,29 +62,26 @@ class KFilter:
         self.R = R
 
     def setInitial(self, X0, P0):
-        # X0 : initial state of the system
-        # P0 : initial covariance
+        # X : initial state of the system
+        # P : initial covariance
 
-        self.X0 = X0
-        self.P0 = P0
+        self.X = X0
+        self.P = P0
 
     def predict(self, U):
         # Make prediction based on physical system
         # U : control vector (measured acceleration)
 
-        self.X = (self.A @ self.X0) + self.B @ U
-        self.P = (self.A @ self.P0 @ self.A.transpose()) + self.Q
+        self.X = (self.A @ self.X) + self.B @ U
+        self.P = (self.A @ self.P @ self.A.T) + self.Q
 
     def correct(self, Z):
-        # Correct the prediction, using mesaurement
-        # Z : measure vector
+        # Correct the prediction, using measurement
+        # Z : measurement vector
 
-        self.K = (self.P @ self.H.transpose()) @ np.linalg.pinv(self.H @ self.P @ self.H.transpose() + self.R)
+        self.K = self.P @ self.H.T @ np.linalg.inv(self.H @ self.P @ self.H.T + self.R)   
         self.X = self.X + self.K @ (Z - self.H @ self.X)
-        self.P = (np.eye(self.n) - self.K @ self.H) @ self.P
-
-        self.X0 = self.X
-        self.P0 = self.P
+        self.P = self.P - self.K @ self.H @ self.P
 
 
 class ComplementaryFilter:
@@ -175,7 +174,7 @@ class Estimator:
         if not self.kf_enabled:
             self.filter_xyz_pos.LP_x[2] = self.FK_h
         else:
-            self.kf.X0[2, 0] = h_init
+            self.kf.X[2, 0] = h_init
 
         # Boolean to disable FK and FG near contact switches
         self.close_from_contact = False
@@ -211,7 +210,7 @@ class Estimator:
         self.actuators_vel = np.zeros((12, ))
 
         # Transform between the base frame and the IMU frame
-        self._1Mi = pin.SE3(pin.Quaternion(np.array([[0.0, 0.0, 0.0, 1.0]]).transpose()),
+        self._1Mi = pin.SE3(pin.Quaternion(np.array([[0.0, 0.0, 0.0, 1.0]]).T),
                             np.array([0.1163, 0.0, 0.02]))
 
         # Logging matrices
@@ -406,7 +405,7 @@ class Estimator:
             """
 
             # Linear velocity of the trunk (world frame)
-            oRb = pin.Quaternion(np.array([self.IMU_ang_pos]).transpose()).toRotationMatrix()
+            oRb = pin.Quaternion(np.array([self.IMU_ang_pos]).T).toRotationMatrix()
             self.o_filt_lin_vel[:, 0:1] = oRb @ self.filt_lin_vel.reshape((3, 1))
 
             # Position of the trunk
@@ -414,7 +413,7 @@ class Estimator:
                 self.FK_xyz[:] + self.xyz_mean_feet[:], self.o_filt_lin_vel.ravel(), alpha=0.995)
         else:  # Use Kalman filter
 
-            oRb = pin.Quaternion(np.array([self.IMU_ang_pos]).transpose()).toRotationMatrix()
+            oRb = pin.Quaternion(np.array([self.IMU_ang_pos]).T).toRotationMatrix()
             self.kf.A[0:3, 3:6] = self.kf.dt * oRb
             self.kf.B[0:3, 0:3] = (0.5 * self.kf.dt**2) * oRb
 
@@ -618,7 +617,7 @@ if __name__ == "__main__":
     p = np.sin(t)
     v = np.cos(t)
     a = - np.sin(t)
-    KF.X0[3:, :] = np.ones((3, 1))
+    KF.X[3:, :] = np.ones((3, 1))
     res = np.zeros((6, N))
 
     Z = np.random.normal(0, 0.1, (6, N))
