@@ -15,8 +15,8 @@ class Device:
     """
     Notation adapter
     """
-    def __init__(self, o_a_oi, i_omg_oi, o_q_i, qa, dqa):
-        self.baseLinearAcceleration = o_a_oi
+    def __init__(self, i_a_oi, i_omg_oi, o_q_i, qa, dqa):
+        self.baseLinearAcceleration = i_a_oi
         self.baseAngularVelocity = i_omg_oi
         self.baseOrientation = o_q_i
         self.q_mes = qa
@@ -99,7 +99,8 @@ for i in range(N):
     # define measurements
     o_R_i = arr_dic_meas['o_R_i'][i,:]  # retrieve IMU pose estimation
     o_q_i = arr_dic_meas['o_q_i'][i,:]  # retrieve IMU pose estimation
-    o_a_oi = arr_dic_meas['o_a_oi'][i,:] # retrieve IMU linear acceleration estimation
+    i_a_oi = arr_dic_meas['i_a_oi'][i,:] # retrieve IMU gravity compensated linear acceleration expressed in IMU (robot) frame
+    o_a_oi = arr_dic_meas['o_a_oi'][i,:] # retrieve IMU gravity compensated linear acceleration expressed in world frame
 
     i_omg_oi = arr_dic_meas['i_omg_oi'][i,:]
     qa = arr_dic_meas['qa'][i,:]
@@ -125,17 +126,17 @@ for i in range(N):
         goals = np.zeros((3,4))
 
     # Kalman Filter with feet
-    KFImuLegWithFeet.run_filter(o_a_oi, o_R_i, qa, dqa, i_omg_oi, contact_status)
+    KFImuLegWithFeet.run_filter(i_a_oi, o_R_i, qa, dqa, i_omg_oi, contact_status)
     q_kf_arr[i,:], v_kf_arr[i,:] = KFImuLegWithFeet.get_configurations()
     feet_state_arr[i,:] = KFImuLegWithFeet.get_state()[6:]
 
     # Complementary filter
-    device = Device(o_a_oi, i_omg_oi, o_q_i, qa, dqa)
+    device = Device(i_a_oi, i_omg_oi, o_q_i, qa, dqa)
     cf.run_filter(i, contact_status, device, goals, remaining_steps=100)
     q_cf_arr[i,:], v_cf_arr[i,:] = cf.get_configurations()
 
     # Kalman Filter without feet
-    device = Device(o_a_oi, i_omg_oi, o_q_i, qa, dqa)
+    device = Device(i_a_oi, i_omg_oi, o_q_i, qa, dqa)
     KFImuLeg.run_filter(i, contact_status, device, goals, remaining_steps=100)
     q_kfwof_arr[i,:], v_kfwof_arr[i,:] = KFImuLeg.get_configurations()
 
