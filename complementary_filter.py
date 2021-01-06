@@ -80,7 +80,7 @@ class KFilter:
         # Correct the prediction, using measurement
         # Z : measurement vector
 
-        self.K = self.P @ self.H.T @ np.linalg.inv(self.H @ self.P @ self.H.T + self.R)   
+        self.K = self.P @ self.H.T @ np.linalg.inv(self.H @ self.P @ self.H.T + self.R)
         self.X = self.X + self.K @ (Z - self.H @ self.X)
         self.P = self.P - self.K @ self.H @ self.P
 
@@ -155,7 +155,7 @@ class Estimator:
         self.alpha_secu = -y+np.sqrt(y*y+2*y)
 
         self.kf_enabled = kf_enabled
-        if not self.kf_enabled: # Complementary filters for linear velocity and position
+        if not self.kf_enabled:  # Complementary filters for linear velocity and position
             self.filter_xyz_vel = ComplementaryFilter(dt, 3.0)
             self.filter_xyz_pos = ComplementaryFilter(dt, 500.0)
         else:  # Kalman filter for linear velocity and position
@@ -230,7 +230,6 @@ class Estimator:
         self.rotated_FK = np.zeros((3, N_simulation))
         self.k_log = 0
 
-    
     def get_configurations(self):
         return self.q_filt.reshape((19,)), self.v_filt.reshape((18,))
 
@@ -390,31 +389,37 @@ class Estimator:
             self.close_from_contact = False  # Lower flag
 
         if not self.kf_enabled:  # Use cascade of complementary filters
-            
+
+            # Rotation matrix to go from base frame to world frame
             oRb = pin.Quaternion(np.array([self.IMU_ang_pos]).T).toRotationMatrix()
-            
-            # Linear velocity of the trunk (world frame)
-            self.o_filt_lin_vel[:, 0] = self.filter_xyz_vel.compute(
-                (oRb @ np.array([self.FK_lin_vel]).T).ravel(),
-                (oRb @ np.array([self.IMU_lin_acc]).T).ravel(), alpha=self.alpha)
 
-            # Taking into account lever arm effect due to the position of the IMU
-            """# Get previous base vel wrt world in base frame into IMU frame
-            i_filt_lin_vel = self.filt_lin_vel[:] + self.cross3(self._1Mi.translation.ravel(), self.IMU_ang_vel).ravel()
+            # Get FK estimated velocity at IMU location (base frame)
+            cross_product = self.cross3(self._1Mi.translation.ravel(), self.IMU_ang_vel).ravel()
+            i_FK_lin_vel = self.FK_lin_vel[:] + cross_product
 
-            # Merge IMU base vel wrt world in IMU frame with FK base vel wrt world in IMU frame
-            i_merged_lin_vel = self.alpha * (i_filt_lin_vel + self.IMU_lin_acc * self.dt) + (1 - self.alpha) * self.FK_lin_vel
+            # Get FK estimated velocity at IMU location (world frame)
+            oi_FK_lin_vel = (oRb @ np.array([i_FK_lin_vel]).T).ravel()
 
-            # Get merged base vel wrt world in IMU frame into base frame
-            self.filt_lin_vel[:] = i_merged_lin_vel + self.cross3(-self._1Mi.translation.ravel(), self.IMU_ang_vel).ravel()
-            """
+            # Integration of IMU acc at IMU location (world frame)
+            oi_filt_lin_vel = self.filter_xyz_vel.compute(oi_FK_lin_vel,
+                                                          (oRb @ np.array([self.IMU_lin_acc]).T).ravel(),
+                                                          alpha=self.alpha)
 
-            # Linear velocity of the trunk (base frame)
-            self.filt_lin_vel[:] = (oRb.T @ self.o_filt_lin_vel).ravel()
+            # Filtered estimated velocity at IMU location (base frame)
+            i_filt_lin_vel = (oRb.T @ np.array([oi_filt_lin_vel]).T).ravel()
 
-            # Position of the trunk
+            # Filtered estimated velocity at center base (base frame)
+            b_filt_lin_vel = i_filt_lin_vel - cross_product
+
+            # Filtered estimated velocity at center base (world frame)
+            ob_filt_lin_vel = (oRb @ np.array([b_filt_lin_vel]).T).ravel()
+
+            # Position of the center of the base from FGeometry and filtered velocity (world frame)
             self.filt_lin_pos[:] = self.filter_xyz_pos.compute(
-                self.FK_xyz[:] + self.xyz_mean_feet[:], self.o_filt_lin_vel.ravel(), alpha=0.995)
+                self.FK_xyz[:] + self.xyz_mean_feet[:], ob_filt_lin_vel, alpha=0.995)
+
+            self.filt_lin_vel[:] = b_filt_lin_vel
+
         else:  # Use Kalman filter
 
             oRb = pin.Quaternion(np.array([self.IMU_ang_pos]).T).toRotationMatrix()
@@ -494,8 +499,7 @@ class Estimator:
             (_1RF @ _Fv1F.reshape((3, 1)))
 
         # IMU and base frames have the same orientation
-        _iv0i = _1v01 + \
-            self.cross3(self._1Mi.translation.ravel(), _1w01.ravel())
+        # _iv0i = _1v01 + self.cross3(self._1Mi.translation.ravel(), _1w01.ravel())
 
         return np.array(_1v01)
 
@@ -641,16 +645,16 @@ if __name__ == "__main__":
             ax0 = plt.subplot(3, 1, i+1)
         else:
             plt.subplot(3, 1, i+1, sharex=ax0)
-        plt.plot(p, linewidth=3, color='r')   
+        plt.plot(p, linewidth=3, color='r')
         plt.plot(res[i, :], linewidth=3, color='b')
-    
+
     plt.figure()
     for i in range(3):
         if i == 0:
             ax0 = plt.subplot(3, 1, i+1)
         else:
             plt.subplot(3, 1, i+1, sharex=ax0)
-        plt.plot(v, linewidth=3, color='r')   
+        plt.plot(v, linewidth=3, color='r')
         plt.plot(res[i+3, :], linewidth=3, color='b')
 
     plt.show()
