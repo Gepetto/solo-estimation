@@ -32,11 +32,12 @@ class KFilter:
         sigma_acc = 1000
         G = np.array([[0.5 * dt**2], [0.5 * dt**2], [0.5 * dt**2], [dt], [dt], [dt]])
         self.Q = G @ G.T * (sigma_acc**2)
+        self.Q = 1000 * np.eye(6)
 
         # Covariance of the observation noise
         self.R = np.zeros((self.n, self.n))
-        sigma_xyz = 0.01
-        sigma_vxyz = 0.1
+        sigma_xyz = 1.0
+        sigma_vxyz = 1.0
         for i in range(3):
             self.R[i, i] = sigma_xyz**2  # Position observation noise
             self.R[i+3, i+3] = sigma_vxyz**2  # Velocity observation noise
@@ -53,7 +54,7 @@ class KFilter:
         # Initial state and covariance
         self.X = np.zeros((self.n, 1))
         # self.P = np.zeros((self.n, self.n))
-        self.P = 0.1*np.ones((self.n, self.n))
+        self.P = 1.0 * np.eye(self.n)
 
     def setFixed(self, A, H, Q, R):
         self.A = A
@@ -144,7 +145,7 @@ class Estimator:
         self.dt = dt
 
         # Filtering estimated linear velocity
-        fc = 10.0  # Cut frequency
+        fc = 50.0  # Cut frequency
         y = 1 - np.cos(2*np.pi*fc*dt)
         self.alpha_v = -y+np.sqrt(y*y+2*y)
 
@@ -379,7 +380,7 @@ class Estimator:
         a = np.ceil(np.max(self.k_since_contact)/10) - 1
         b = remaining_steps
         n = 1  # Nb of steps of margin around contact switch
-        v = 0.96  # Minimum alpha value
+        v = 0.97  # Minimum alpha value
         c = ((a + b) - 2 * n) * 0.5
         if (a <= (n-1)) or (b <= n):  # If we are close from contact switch
             self.alpha = 1.0  # Only trust IMU data
@@ -389,9 +390,13 @@ class Estimator:
             self.close_from_contact = False  # Lower flag
 
         if not self.kf_enabled:  # Use cascade of complementary filters
-            # Linear velocity of the trunk (base frame)
-            self.filt_lin_vel[:] = self.filter_xyz_vel.compute(
-                self.FK_lin_vel[:], self.IMU_lin_acc[:], alpha=self.alpha)
+            
+            oRb = pin.Quaternion(np.array([self.IMU_ang_pos]).T).toRotationMatrix()
+            
+            # Linear velocity of the trunk (world frame)
+            self.o_filt_lin_vel[:, 0] = self.filter_xyz_vel.compute(
+                (oRb @ np.array([self.FK_lin_vel]).T).ravel(),
+                (oRb @ np.array([self.IMU_lin_acc]).T).ravel(), alpha=self.alpha)
 
             # Taking into account lever arm effect due to the position of the IMU
             """# Get previous base vel wrt world in base frame into IMU frame
@@ -404,9 +409,8 @@ class Estimator:
             self.filt_lin_vel[:] = i_merged_lin_vel + self.cross3(-self._1Mi.translation.ravel(), self.IMU_ang_vel).ravel()
             """
 
-            # Linear velocity of the trunk (world frame)
-            oRb = pin.Quaternion(np.array([self.IMU_ang_pos]).T).toRotationMatrix()
-            self.o_filt_lin_vel[:, 0:1] = oRb @ self.filt_lin_vel.reshape((3, 1))
+            # Linear velocity of the trunk (base frame)
+            self.filt_lin_vel[:] = (oRb.T @ self.o_filt_lin_vel).ravel()
 
             # Position of the trunk
             self.filt_lin_pos[:] = self.filter_xyz_pos.compute(
@@ -414,16 +418,16 @@ class Estimator:
         else:  # Use Kalman filter
 
             oRb = pin.Quaternion(np.array([self.IMU_ang_pos]).T).toRotationMatrix()
-            self.kf.A[0:3, 3:6] = self.kf.dt * oRb
-            self.kf.B[0:3, 0:3] = (0.5 * self.kf.dt**2) * oRb
+            # self.kf.A[0:3, 3:6] = self.kf.dt * oRb
+            # self.kf.B[0:3, 0:3] = (0.5 * self.kf.dt**2) * oRb
 
-            self.kf.predict(self.IMU_lin_acc.reshape((3, 1)))
+            self.kf.predict(oRb @ self.IMU_lin_acc.reshape((3, 1)))
             self.Z[0:3, 0] = self.FK_xyz[:] + self.xyz_mean_feet[:]
-            self.Z[3:6, 0] = self.FK_lin_vel
+            self.Z[3:6, 0] = oRb.T @ self.FK_lin_vel
             self.kf.correct(self.Z)
 
             self.filt_lin_pos[:] = self.kf.X[0:3, 0]
-            self.filt_lin_vel[:] = self.kf.X[3:6, 0]
+            self.filt_lin_vel[:] = oRb @ self.kf.X[3:6, 0]
 
         # Logging
         self.log_alpha[self.k_log] = self.alpha
