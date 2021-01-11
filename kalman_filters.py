@@ -19,37 +19,8 @@ def cross3(u, v):
 def q2R(q_arr):
     return pin.Quaternion(q_arr.reshape((4,1))).toRotationMatrix()
 
-class KalmanFilter:
 
-    def __init__(self):
-        pass
-
-    def kalman_update(self, y, H, R):
-        # general unoptimized kalman update
-        # innovation z = y - h(x)
-        # Innov cov Z = HPH’ + R ; avec H = dh/dx = - dz/dx
-        # Kalman gain K = PH’ / Z
-        # state error dx = K*z
-        # State update x <-- x (+) dx
-        # Cov update P <-- P - KZP
-
-        z = y - H @ self.x
-        Z = H @ self.P @ H.T + R
-        if isinstance(Z, np.ndarray):
-            K = self.P @ H.T @ np.linalg.inv(Z)
-            dx = K @ z
-        else:  # for scalar measurements
-            K = self.P @ H.T / Z
-            dx = K * z
-            # reshape to avoid confusion between inner and outer product when multiplying 2 1d arrays
-            K = K.reshape((self.state_size,1))
-            H = H.reshape((1,self.state_size))
-        self.x = self.x + dx
-        self.P = self.P - K @ H @ self.P
-        
-        return z, dx
-
-class ImuLegKF(KalmanFilter):
+class ImuLegKF:
 
     def __init__(self, dt, q_init):
         self.robot = load('solo12')
@@ -64,8 +35,8 @@ class ImuLegKF(KalmanFilter):
         self.cid_stateidx_map = {cid: 6+3*i for i, cid in enumerate(self.contact_ids)}
 
         # Base to IMU transformation
-        # b_p_bi = np.zeros(3)
-        self.b_p_bi = np.array([0.1163, 0.0, 0.02])
+        self.b_p_bi = np.zeros(3)
+        # self.b_p_bi = np.array([0.1163, 0.0, 0.02])
         b_q_i  = np.array([0, 0, 0, 1])
 
         self.b_T_i = pin.SE3(q2R(b_q_i), self.b_p_bi)
@@ -104,17 +75,17 @@ class ImuLegKF(KalmanFilter):
             'std_acc': 0.08,    # noise on linear acceleration measurements (m.s-2), add a slack to account for bias
             'std_wb': 0.01,    # noise on angular velocity measurements (rad.s-1), add a slack to account for bias 
             'std_qa': 0.05,     # noise on joint position measurements (rad)
-            'std_dqa': 0.05,    # noise on joint velocity measurements (rad.s-1)
+            'std_dqa': 5,    # noise on joint velocity measurements (rad.s-1)
             'std_kin': 0.005,    # kinematic uncertainties (m)
             'std_hfoot': 0.001, # terrain height uncertainty -> roughness of the terrain
         } 
 
         # static jacs and covs
+        self.Qfoot = std_kf_dic['std_foot']**2 * np.eye(3)
         self.Qacc = std_kf_dic['std_acc']**2 * np.eye(3)
         self.Qwb = std_kf_dic['std_wb']**2 * np.eye(3)
         self.Qqa = std_kf_dic['std_qa']**2 * np.eye(self.robot.model.nv - 6)
         self.Qdqa = std_kf_dic['std_dqa']**2 * np.eye(self.robot.model.nv - 6)
-        self.Qfoot = std_kf_dic['std_foot']**2 * np.eye(3)
         self.Qkin = std_kf_dic['std_kin']**2 * np.eye(3)
         self.Qhfoot = std_kf_dic['std_hfoot']**2
         
@@ -126,13 +97,17 @@ class ImuLegKF(KalmanFilter):
 
         # measurements to be used in KF update by default
         # self.meas_choices = (0,0,0)  # nothing happens
-        # self.meas_choices = (1,0,0)  # only kin
+        # self.meas_choices = (1,0,0)  # only relp
         # self.meas_choices = (0,1,0)  # only diff kin
-        # self.meas_choices = (1,1,0)  # all kinematics
+        # self.meas_choices = (1,1,0)  # relp + diff kin
+        # self.meas_choices = (1,0,1)  # relp + foot height
         self.meas_choices = (1,1,1)  # all kinematics + foot height
 
         # contact detection
         self.k_since_contact = np.zeros(4)
+
+
+        self.o_v_oi_dic = {i: [] for i in range(4)}
 
     def run_filter(self, o_a_oi, o_R_i, qa, dqa, i_omg_oi, contact_status):
         self.update_data(o_a_oi, o_R_i, qa, dqa, i_omg_oi, contact_status)
@@ -157,7 +132,7 @@ class ImuLegKF(KalmanFilter):
         # return state as configuration arrays
         self.update_base_state()
         q = np.concatenate([self.o_p_ob, self.o_q_b, self.qa])
-        v = np.concatenate([self.o_R_b.T@self.o_v_ob, self.b_omg_ob, self.dqa])
+        v = np.concatenate([self.b_v_ob, self.b_omg_ob, self.dqa])
         return q, v
 
     def update_base_state(self):
@@ -171,15 +146,12 @@ class ImuLegKF(KalmanFilter):
         # from current estimates
         self.b_v_ob = self.o_R_b.T@self.o_v_ob
 
-        # only for force estimation
-        self.o_a_ob = self.o_a_oi + self.o_R_i@cross3(self.i_omg_oi, cross3(self.i_omg_oi, self.i_p_ib))     # acceleration composition (neglecting i_domgdt_oi x i_p_ib)
-
         return 0
 
     def detect_feets_in_contact(self):
         self.k_since_contact += self.contact_status  # Increment feet in stance phase
         self.k_since_contact *= self.contact_status  # Reset feet in swing phase
-        self.feets_in_contact = (self.k_since_contact > 16) 
+        self.feets_in_contact = (self.k_since_contact > 50) 
 
     def propagate(self):
         """
@@ -231,25 +203,38 @@ class ImuLegKF(KalmanFilter):
             self.correct_height(self.feets_in_contact)
     
     def correct_relp(self, q_st, o_R_i,  feets_in_contact):
-        for i_ee, cid in enumerate(self.cid_stateidx_map):
-            b_p_bl = self.robot.framePlacement(q_st, cid, update_kinematics=False).translation
-            i_p_il =  self.i_T_b * b_p_bl 
-            o_p_il = o_R_i @ i_p_il
-            Q_relp = self.relp_cov(q_st, o_R_i, cid)
-            # if feets_in_contact[i_ee]:
-            #     Q_relp *= 10  # crank up covariance: foot rel position less reliable when in air (really?)
-            self.kalman_update(o_p_il, self.H_relp_dic[cid], Q_relp)
+        for i_ee, cid in enumerate(self.contact_ids):
+            if feets_in_contact[i_ee]:
+                b_p_bl = self.robot.framePlacement(q_st, cid, update_kinematics=True).translation
+                i_p_il = self.i_T_b * b_p_bl 
+                o_p_il = o_R_i @ i_p_il
+                Q_relp = self.relp_cov(q_st, o_R_i, cid)
+                # if feets_in_contact[i_ee]:
+                #     Q_relp *= 10  # crank up covariance: foot rel position less reliable when in air (really?)
+                self.kalman_update(o_p_il, self.H_relp_dic[cid], Q_relp)
 
     def correct_relv(self, q_st, dq_st, i_omg_oi, o_R_i, feets_in_contact):
         for i_ee, cid in enumerate(self.contact_ids):
             if feets_in_contact[i_ee]:
                 # measurement: velocity in world frame
-                o_v_ob = base_vel_from_stable_contact(self.robot, q_st, dq_st, i_omg_oi, o_R_i, cid)
-                o_v_oi = o_v_ob + o_R_i @ cross3(i_omg_oi, self.i_R_b@self.b_p_bi)  # velocity composition law
+                b_T_l = self.robot.framePlacement(q_st, cid, update_kinematics=False)
+                b_p_bl = b_T_l.translation
+                i_p_il = self.i_T_b * b_p_bl
+                b_R_l = b_T_l.rotation
 
+                # retrieve relative foot base velocity
+                l_v_bl = self.robot.frameVelocity(q_st, dq_st, cid, update_kinematics=False).linear
+
+                # measurement: velocity in world frame
+                # print(np.linalg.norm(l_v_bl)/np.linalg.norm(cross3(i_omg_oi, i_p_il)))
+                o_v_oi = - self.o_R_b @ b_R_l @ l_v_bl - self.o_R_i @ cross3(i_omg_oi, i_p_il)
                 Q_vel = self.vel_meas_cov(q_st, i_omg_oi, o_R_i, cid)
 
-                self.kalman_update(o_v_ob, self.H_vel, Q_vel)
+                self.o_v_oi_dic[i_ee].append(o_v_oi)
+
+                self.kalman_update(o_v_oi, self.H_vel, Q_vel)
+            else:
+                self.o_v_oi_dic[i_ee].append(np.zeros(3))
 
     def correct_height(self, feets_in_contact):
         for i_ee, cid in enumerate(self.contact_ids):
@@ -277,7 +262,7 @@ class ImuLegKF(KalmanFilter):
             if feets_in_contact[i]:
                 self.P[i_fi:i_fi+3,i_fi:i_fi+3] += self.Qfoot*self.dt
             else:
-                self.P[i_fi:i_fi+3,i_fi:i_fi+3] += 10000*self.Qfoot*self.dt
+                self.P[i_fi:i_fi+3,i_fi:i_fi+3] += 100*np.eye(self.Qfoot.shape[0])*self.dt
 
     def relp_meas_H(self, cid_idx):
         H = np.zeros((3,self.state_size))
@@ -302,7 +287,31 @@ class ImuLegKF(KalmanFilter):
         b_p_bl_x = screw(bTl.translation)
         # minuses due to relation [.]x^T = -[.]x
         return o_R_i@(b_Jl @ self.Qdqa @ b_Jl.T - b_p_bl_x @ self.Qwb @ b_p_bl_x - wbx @ b_Jl @ self.Qqa @ b_Jl.T @ wbx)@o_R_i.T
- 
+    
+    def kalman_update(self, y, H, R):
+        # general unoptimized kalman update
+        # innovation z = y - h(x)
+        # Innov cov Z = HPH’ + R ; avec H = dh/dx = - dz/dx
+        # Kalman gain K = PH’ / Z
+        # state error dx = K*z
+        # State update x <-- x (+) dx
+        # Cov update P <-- P - KZP
+
+        z = y - H @ self.x
+        Z = H @ self.P @ H.T + R
+        if isinstance(Z, np.ndarray):
+            K = self.P @ H.T @ np.linalg.inv(Z)
+            dx = K @ z
+        else:  # for scalar measurements
+            K = self.P @ H.T / Z
+            dx = K * z
+            # reshape to avoid confusion between inner and outer product when multiplying 2 1d arrays
+            K = K.reshape((self.state_size,1))
+            H = H.reshape((1,self.state_size))
+        self.x = self.x + dx
+        self.P = self.P - K @ H @ self.P
+        
+        return z, dx
 
 def base_vel_from_stable_contact(robot, q, dq, i_omg_oi, o_R_i, cid):
     """
@@ -312,9 +321,9 @@ def base_vel_from_stable_contact(robot, q, dq, i_omg_oi, o_R_i, cid):
     """
     b_T_l = robot.framePlacement(q, cid, update_kinematics=False)
     b_p_bl = b_T_l.translation
-    bRl = b_T_l.rotation
+    b_R_l = b_T_l.rotation
 
     l_v_bl = robot.frameVelocity(q, dq, cid, update_kinematics=False).linear
     # measurement: velocity in world frame
-    b_v_ob = - bRl @ l_v_bl + cross3(b_p_bl, i_omg_oi)
+    b_v_ob = - b_R_l @ l_v_bl + cross3(b_p_bl, i_omg_oi)
     return o_R_i @ b_v_ob
