@@ -407,7 +407,7 @@ class Estimator:
             self.filt_lin_vel[:] = (oRb.T @ self.debug_o_lin_vel).ravel()"""
 
             # Get FK estimated velocity at IMU location (base frame)
-            cross_product = 0.0 * self.cross3(self._1Mi.translation.ravel(), self.IMU_ang_vel).ravel()
+            cross_product = self.cross3(self._1Mi.translation.ravel(), self.IMU_ang_vel).ravel()
             i_FK_lin_vel = self.FK_lin_vel[:] + cross_product
 
             # Get FK estimated velocity at IMU location (world frame)
@@ -429,7 +429,7 @@ class Estimator:
 
             # Position of the center of the base from FGeometry and filtered velocity (world frame)
             self.filt_lin_pos[:] = self.filter_xyz_pos.compute(
-                self.FK_xyz[:] + self.xyz_mean_feet[:], ob_filt_lin_vel, alpha=0.995)
+                self.FK_xyz[:] + self.xyz_mean_feet[:], ob_filt_lin_vel, alpha=1.0)
 
             # Velocity of the center of the base (base frame)
             self.filt_lin_vel[:] = b_filt_lin_vel 
