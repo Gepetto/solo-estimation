@@ -9,7 +9,7 @@ from contact_forces_estimator import ContactForcesEstimator
 from kalman_filters import ImuLegKF, cross3
 from complementary_filter import Estimator
 
-from data_readers import read_data_file_laas, read_data_file_laas_ctrl, shortened_arr_dic
+from data_readers import read_data_file_laas, read_data_file_laas_ctrl, shortened_arr_dic, add_measurement_noise
 
 class Device:
     """
@@ -25,7 +25,8 @@ class Device:
 ##############################################
 # extract raw trajectory from data file
 ##############################################
-dt = 1e-3
+# dt = 1e-3  # real robot
+dt = 2e-3  # simu pybullet
 
 cwdir = os.getcwd()
 DATA_FOLDER_RESULTS = os.path.join(cwdir, 'data/quadruped_experiments_results/')
@@ -46,16 +47,33 @@ data_file_ctrl = 'Experiments_Replay_30_11_2020_bis/data_control_2020_11_30_17_2
 # data_file_ctrl = 'Logs_05_10_2020_18h/data_control_2020_11_05_18_18.npz'
 
 # data_file_meas = 'SinStamping_Corrected_09_12_2020/data_2020_12_09_17_54.npz'  # sin
-data_file_meas = 'SinStamping_Corrected_09_12_2020/data_2020_12_09_17_56.npz'  # stamping
+# data_file_meas = 'SinStamping_Corrected_09_12_2020/data_2020_12_09_17_56.npz'  # stamping
 
-CTRL_FILE = False  # use the available control file for contacts
+# data_file_meas = 'Experiments_Walk_17_12_2020/data_2020_12_17_14_25.npz'  
+# data_file_ctrl = 'Experiments_Walk_17_12_2020/data_control_2020_12_17_14_25.npz'  
+# data_file_meas = 'Experiments_Walk_17_12_2020/data_2020_12_17_14_29.npz'  
+# data_file_ctrl = 'Experiments_Walk_17_12_2020/data_control_2020_12_17_14_29.npz' 
+
+# Simulation
+data_file_meas = 'Simulation_Walk_06_01_2020/data_2021_01_06_17_47.npz'
+data_file_ctrl = 'Simulation_Walk_06_01_2020/data_control_2021_01_06_17_47.npz'
+# data_file_meas = 'Simulation_Walk_06_01_2020/data_2021_01_06_17_48.npz'
+# data_file_ctrl = 'Simulation_Walk_06_01_2020/data_control_2021_01_06_17_48.npz'
+
+
+CTRL_FILE = True  # use the available control file for contacts
 THRESH_FZ = 1  # sin
 
 
 print('Reading ', DATA_FOLDER+data_file_meas)
 arr_dic_meas = read_data_file_laas(DATA_FOLDER+data_file_meas, dt)
+arr_dic_meas = add_measurement_noise(arr_dic_meas)
 print('Reading ', DATA_FOLDER+data_file_ctrl)
 arr_dic_ctrl = read_data_file_laas_ctrl(DATA_FOLDER+data_file_ctrl)
+
+# Shorten?
+arr_dic_meas = shortened_arr_dic(arr_dic_meas, N=5000)
+arr_dic_ctrl = shortened_arr_dic(arr_dic_ctrl, N=5000)
 
 t_arr = arr_dic_meas['t']
 N = len(t_arr)
@@ -120,13 +138,13 @@ for i in range(N):
         contact_status_arr[i,:] = contact_status 
 
         # initial blip
-        if i*dt < 0.3:
-            contact_status = np.zeros(4)
+        # if i*dt < 0.3:
+        #     contact_status = np.zeros(4)
 
         goals = np.zeros((3,4))
 
     # Kalman Filter with feet
-    KFImuLegWithFeet.run_filter(i_a_oi, o_R_i, qa, dqa, i_omg_oi, contact_status)
+    KFImuLegWithFeet.run_filter(o_a_oi, o_R_i, qa, dqa, i_omg_oi, contact_status)
     q_kf_arr[i,:], v_kf_arr[i,:] = KFImuLegWithFeet.get_configurations()
     feet_state_arr[i,:] = KFImuLegWithFeet.get_state()[6:]
 
@@ -179,15 +197,40 @@ for i in range(3):
     plt.plot(t_arr, q_kfwof_arr[:,i], 'r', label='KFWithoutFeet')
     plt.legend()
 
-plt.figure('KF feet')
-plt.title('KF feet')
+plt.figure('KF feet XYZ')
+plt.title('KF feet XYZ')
 for i in range(3):
     plt.subplot(3,1,1+i)
     for j in range(4):
         plt.plot(t_arr, feet_state_arr[:,3*j+i], label=str(j))
     plt.legend()
 
+plt.figure('KF feet XY')
+plt.title('KF feet XY')
+for i_ee in range(4):
+    plt.plot(feet_state_arr[:,3*i_ee], feet_state_arr[:,3*i_ee+1], '.', markersize=1, label=KFImuLegWithFeet.contact_frame_names[i_ee])
+    plt.legend()
+plt.plot(q_kf_arr[:,0], q_kf_arr[:,1], label='base')
+plt.legend()
 
+if len(KFImuLegWithFeet.o_v_oi_dic[0]) > 0:
+    plt.figure('Base vel from feet vs mocap')
+    plt.title('Base vel from feet vs mocap')
+    for i_ee in range(4):
+        plt.plot(t_arr, KFImuLegWithFeet.o_v_oi_dic[i_ee], '.', markersize=1, label=KFImuLegWithFeet.contact_frame_names[i_ee])
+        plt.legend()
+    plt.plot(q_kf_arr[:,0], q_kf_arr[:,1], label='base')
+    plt.legend()
+
+    for i_ee in range(4):
+        KFImuLegWithFeet.o_v_oi_dic[i_ee] = np.array(KFImuLegWithFeet.o_v_oi_dic[i_ee])
+    plt.figure('Base velX from feet vs mocap')
+    plt.title('Base velX from feet vs mocap')
+    l = [0]
+    for i_ee in l:
+        plt.plot(t_arr, KFImuLegWithFeet.o_v_oi_dic[i_ee][:,0], '.', markersize=1, label=KFImuLegWithFeet.contact_frame_names[i_ee])
+    # plt.plot(t_arr, arr_dic_meas['m_v_wm'][:,0], 'rx', label='Mo-Cap')
+    # plt.legend()
 
 if '--show' in sys.argv:
     plt.show()

@@ -1,4 +1,5 @@
 import time
+import copy
 import numpy as np
 import pandas as pd
 import pinocchio as pin
@@ -142,6 +143,7 @@ def read_data_file_laas(file_path, dt):
 
     return arr_dic
 
+
 def read_data_file_laas_ctrl(file_path):
     data = np.load(file_path)
 
@@ -150,10 +152,39 @@ def read_data_file_laas_ctrl(file_path):
     }
     return arr_dic
 
-def shortened_arr_dic(arr_dic, S, N=None):
+
+def shortened_arr_dic(arr_dic, S=0, N=None):
     if N is None:
         N = len(arr_dic['t'])
     return {k: arr_dic[k][S:N] for k in arr_dic}
+
+
+def add_measurement_noise(arr_dic):
+    # acc
+    # gyr
+    # qa
+    # dqa
+    d_cpy = copy.deepcopy(arr_dic)
+    N = len(arr_dic['t'])
+    std_acc = 0.05
+    std_gyr = 0.01
+    std_qa = 0.05
+    std_dqa = 0.005
+    n_acc = np.random.normal(0, std_acc, size=(N,3))
+    n_gyr = np.random.normal(0, std_gyr, size=(N,3))
+    n_qa = np.random.normal(0,   std_qa, size=(N,12))
+    n_dqa = np.random.normal(0, std_dqa, size=(N,12))
+
+    d_cpy['imu_acc'] += n_acc 
+    d_cpy['i_a_oi'] += n_acc 
+    d_cpy['o_a_oi'] = np.array([o_R_i @ i_a_oi for o_R_i, i_a_oi in zip(d_cpy['o_R_i'], d_cpy['i_a_oi'])])
+
+    d_cpy['i_omg_oi'] += n_gyr
+    d_cpy['qa'] += n_qa
+    d_cpy['dqa'] += n_dqa
+
+    return d_cpy
+
 
 if __name__ == '__main__':
     SLEEP = True
