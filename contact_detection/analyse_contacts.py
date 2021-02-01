@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 from IPython import embed
 import time
 import math
-import sklearn.preprocessing, sklearn.decomposition, sklearn.svm, sklearn.model_selection, sklearn.pipeline, sklearn.model_selection
+import sklearn.preprocessing, sklearn.decomposition, sklearn.svm, sklearn.model_selection, sklearn.pipeline
 from mpl_toolkits.mplot3d import Axes3D
 
 def EulerToQuaternion(roll_pitch_yaw):
@@ -64,10 +64,12 @@ def plot_contours(ax, clf, xx, yy, **params):
 # Load motion capture data
 ##
 
+DATA_FOLDER = '../data/Mesures_Contact/'
+
 tsv_name = "Measurement_19_01_2020_17_11.tsv"
-markers = np.loadtxt(fname=tsv_name, dtype=str,
+markers = np.loadtxt(fname=DATA_FOLDER+tsv_name, dtype=str,
                      delimiter="\t", skiprows=9, max_rows=1)[1:]
-data = np.genfromtxt(fname=tsv_name, delimiter="\t", skip_header=10)
+data = np.genfromtxt(fname=DATA_FOLDER+tsv_name, delimiter="\t", skip_header=10)
 data = data[3400:8400, :]
 t_mocap = np.linspace(0, data.shape[0], data.shape[0] + 1)[:-1] * 0.005
 
@@ -77,8 +79,8 @@ t_mocap = np.linspace(0, data.shape[0], data.shape[0] + 1)[:-1] * 0.005
 
 meas_name = "data_2021_01_19_17_11.npz"
 meas_ctrl_name = "data_control_2021_01_19_17_11.npz"
-data_meas = np.load(meas_name)
-data_ctrl = np.load(meas_ctrl_name)
+data_meas = np.load(DATA_FOLDER+meas_name)
+data_ctrl = np.load(DATA_FOLDER+meas_ctrl_name)
 
 torques = data_meas['torquesFromCurrentMeasurment']
 pos = data_ctrl['log_feet_pos']
@@ -378,16 +380,16 @@ ax.set_title("SVC with linear kernel")
 
 
 tsv_name = "Measurement_19_01_2020_16_58.tsv"
-markers = np.loadtxt(fname=tsv_name, dtype=str,
+markers = np.loadtxt(fname=DATA_FOLDER+tsv_name, dtype=str,
                      delimiter="\t", skiprows=9, max_rows=1)[1:]
-data = np.genfromtxt(fname=tsv_name, delimiter="\t", skip_header=10)
+data = np.genfromtxt(fname=DATA_FOLDER+tsv_name, delimiter="\t", skip_header=10)
 data = data[3500:8200, :]
 t_mocap = np.linspace(0, data.shape[0], data.shape[0] + 1)[:-1] * 0.005
 
 meas_name = "data_2021_01_19_16_58.npz"
 meas_ctrl_name = "data_control_2021_01_19_16_58.npz"
-data_meas = np.load(meas_name)
-data_ctrl = np.load(meas_ctrl_name)
+data_meas = np.load(DATA_FOLDER+meas_name)
+data_ctrl = np.load(DATA_FOLDER+meas_ctrl_name)
 
 torques = data_meas['torquesFromCurrentMeasurment']
 pos = data_ctrl['log_feet_pos']
@@ -462,16 +464,16 @@ ax.set_title("SVC with linear kernel")
 
 
 tsv_name = "Measurement_19_01_2020_16_58.tsv"
-markers = np.loadtxt(fname=tsv_name, dtype=str,
+markers = np.loadtxt(fname=DATA_FOLDER+tsv_name, dtype=str,
                      delimiter="\t", skiprows=9, max_rows=1)[1:]
-data = np.genfromtxt(fname=tsv_name, delimiter="\t", skip_header=10)
+data = np.genfromtxt(fname=DATA_FOLDER+tsv_name, delimiter="\t", skip_header=10)
 data = data[3500:8200, :]
 t_mocap = np.linspace(0, data.shape[0], data.shape[0] + 1)[:-1] * 0.005
 
 meas_name = "data_2021_01_19_16_58.npz"
 meas_ctrl_name = "data_control_2021_01_19_16_58.npz"
-data_meas = np.load(meas_name)
-data_ctrl = np.load(meas_ctrl_name)
+data_meas = np.load(DATA_FOLDER+meas_name)
+data_ctrl = np.load(DATA_FOLDER+meas_ctrl_name)
 
 torques = data_meas['torquesFromCurrentMeasurment']
 pos = data_ctrl['log_feet_pos']
@@ -546,16 +548,16 @@ ax.set_title("SVC with linear kernel")
 
 
 tsv_name = "Measurement_19_01_2020_16_33.tsv"
-markers = np.loadtxt(fname=tsv_name, dtype=str,
+markers = np.loadtxt(fname=DATA_FOLDER+tsv_name, dtype=str,
                      delimiter="\t", skiprows=9, max_rows=1)[1:]
-data = np.genfromtxt(fname=tsv_name, delimiter="\t", skip_header=10)
+data = np.genfromtxt(fname=DATA_FOLDER+tsv_name, delimiter="\t", skip_header=10)
 data = data[2560:7250, :]
 t_mocap = np.linspace(0, data.shape[0], data.shape[0] + 1)[:-1] * 0.005
 
 meas_name = "data_2021_01_19_16_33.npz"
 meas_ctrl_name = "data_control_2021_01_19_16_33.npz"
-data_meas = np.load(meas_name)
-data_ctrl = np.load(meas_ctrl_name)
+data_meas = np.load(DATA_FOLDER+meas_name)
+data_ctrl = np.load(DATA_FOLDER+meas_ctrl_name)
 
 torques = data_meas['torquesFromCurrentMeasurment']
 pos = data_ctrl['log_feet_pos']

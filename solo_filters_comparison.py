@@ -55,10 +55,13 @@ data_file_ctrl = 'Experiments_Replay_30_11_2020_bis/data_control_2020_11_30_17_2
 # data_file_ctrl = 'Experiments_Walk_17_12_2020/data_control_2020_12_17_14_29.npz' 
 
 # Simulation
-data_file_meas = 'Simulation_Walk_06_01_2020/data_2021_01_06_17_47.npz'
-data_file_ctrl = 'Simulation_Walk_06_01_2020/data_control_2021_01_06_17_47.npz'
+# data_file_meas = 'Simulation_Walk_06_01_2020/data_2021_01_06_17_47.npz'
+# data_file_ctrl = 'Simulation_Walk_06_01_2020/data_control_2021_01_06_17_47.npz'
 # data_file_meas = 'Simulation_Walk_06_01_2020/data_2021_01_06_17_48.npz'
 # data_file_ctrl = 'Simulation_Walk_06_01_2020/data_control_2021_01_06_17_48.npz'
+# data_file_meas = 'Simulation_Walk_08_01_2021/data_2021_01_08_13_46.npz'
+# data_file_ctrl = 'Simulation_Walk_08_01_2021/data_control_2021_01_08_13_46.npz'
+
 
 
 CTRL_FILE = True  # use the available control file for contacts
