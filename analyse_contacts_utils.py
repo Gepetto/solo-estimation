@@ -131,8 +131,44 @@ def ground_truth(z_arr):
     minima_arr = f(np.arange(len(z_arr)))
     thresh_arr = minima_arr + 2  # from the stepwise minima curve, add a constant threshold
 
-    return (z_arr > thresh_arr).astype(int)
+    return z_arr < thresh_arr
 
+def compute_tptnfpfn(yest, ygtr):
+    """
+    Return True Positives, True Negatives, FalsePositive, FalseNegatives
+    """
+    assert(len(yest) == len(ygtr))
+    n = len(yest)
+    zeros = np.zeros(n)
+    ones = np.ones(n)
+    
+    ytp = np.logical_and(yest == ones,  ygtr == ones )
+    ytn = np.logical_and(yest == zeros, ygtr == zeros)
+    yfp = np.logical_and(yest == ones,  ygtr == zeros)
+    yfn = np.logical_and(yest == zeros, ygtr == ones )
+
+#     assert(((ytp + ytn + yfp + yfn) == np.ones(n)).all())
+
+    return ytp ,ytn ,yfp ,yfn
+
+def plot_tptnfpfn(t_arr, z_arr, ytp ,ytn ,yfp ,yfn):
+    ztp = z_arr.copy()
+    ztn = z_arr.copy()
+    zfp = z_arr.copy()
+    zfn = z_arr.copy()
+
+    ztp[np.logical_not(ytp)] = np.nan
+    ztn[np.logical_not(ytn)] = np.nan
+    zfp[np.logical_not(yfp)] = np.nan
+    zfn[np.logical_not(yfn)] = np.nan
+
+    plt.figure()
+    plt.plot(t_arr, ztp, 'g.', markersize=2, label='tp')
+    plt.plot(t_arr, ztn, 'r.', markersize=2, label='tn')
+    plt.plot(t_arr, zfp, 'b^', markersize=4, label='fp')
+    plt.plot(t_arr, zfn, 'kx', markersize=4, label='fn')
+    plt.legend()
+    plt.show()
 
 ########################################
 
